@@ -130,7 +130,12 @@ func NewReader(f io.ReaderAt, size int64) (*Reader, error) {
 // to try. If pw returns the empty string, NewReaderEncrypted stops trying to decrypt
 // the file and returns an error.
 func NewReaderEncrypted(f io.ReaderAt, size int64, pw func() string) (*Reader, error) {
-	err := checkForValidHeader(f)
+	f, size, err := removePrefix(f, size)
+	if err != nil {
+		return nil, fmt.Errorf("error finding/triming lines until header: :%w", err)
+	}
+
+	err = checkForValidHeader(f)
 	if err != nil {
 		return nil, fmt.Errorf("error checking header: %w", err)
 	}
@@ -1149,4 +1154,36 @@ func (r *cbcReader) Read(b []byte) (n int, err error) {
 	n = copy(b, r.pend)
 	r.pend = r.pend[n:]
 	return n, nil
+}
+
+// removePrefix scans the file, skips any data before the "%PDF-1." header,
+// and returns a new io.ReaderAt that starts right at the header.
+func removePrefix(f io.ReaderAt, size int64) (io.ReaderAt, int64, error) {
+	// Read a chunk of the file to search for the PDF header
+	buf := make([]byte, 4096)
+	n, err := f.ReadAt(buf, 0)
+	if err != nil && err != io.EOF {
+		return nil, 0, fmt.Errorf("error reading file: %w", err)
+	}
+
+	// Look for the "%PDF-1." header
+	pdfHeader := []byte("%PDF-1.")
+	index := bytes.Index(buf[:n], pdfHeader)
+	if index == -1 {
+		return nil, 0, fmt.Errorf("not a valid PDF file: missing header")
+	}
+
+	// Return the portion of the file starting from "%PDF-1."
+	offset := int64(index)
+	return &fileReaderAt{file: f, offset: offset}, size - offset, nil
+}
+
+// fileReaderAt is a helper type that implements io.ReaderAt, starting at a given offset
+type fileReaderAt struct {
+	file   io.ReaderAt
+	offset int64
+}
+
+func (r *fileReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
+	return r.file.ReadAt(p, off+r.offset)
 }
