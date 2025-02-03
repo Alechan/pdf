@@ -130,14 +130,14 @@ func NewReader(f io.ReaderAt, size int64) (*Reader, error) {
 // to try. If pw returns the empty string, NewReaderEncrypted stops trying to decrypt
 // the file and returns an error.
 func NewReaderEncrypted(f io.ReaderAt, size int64, pw func() string) (*Reader, error) {
-	buf := make([]byte, 10)
-	f.ReadAt(buf, 0)
-	if !bytes.HasPrefix(buf, []byte("%PDF-1.")) || buf[7] < '0' || buf[7] > '7' || buf[8] != '\r' && buf[8] != '\n' {
-		return nil, fmt.Errorf("not a PDF file: invalid header")
+	err := checkForValidHeader(f)
+	if err != nil {
+		return nil, fmt.Errorf("error checking header: %w", err)
 	}
+
 	end := size
 	const endChunk = 1024
-	buf = make([]byte, endChunk)
+	buf := make([]byte, endChunk)
 	f.ReadAt(buf, end-endChunk)
 	for len(buf) > 0 && buf[len(buf)-1] == '\n' || buf[len(buf)-1] == '\r' {
 		buf = buf[:len(buf)-1]
@@ -192,6 +192,43 @@ func NewReaderEncrypted(f io.ReaderAt, size int64, pw func() string) (*Reader, e
 		}
 	}
 	return nil, err
+}
+
+//func checkForValidHeader(f io.ReaderAt) error {
+//	buf := make([]byte, 10)
+//	f.ReadAt(buf, 0)
+//	if !bytes.HasPrefix(buf, []byte("%PDF-1.")) || buf[7] < '0' || buf[7] > '7' || buf[8] != '\r' && buf[8] != '\n' {
+//		return fmt.Errorf("not a PDF file: invalid header")
+//	}
+//	return nil
+//}
+
+func checkForValidHeader(f io.ReaderAt) error {
+	//func findPDFHeader(f *os.File) (int64, error) {
+	buf := make([]byte, 4096) // Read up to 4KB for flexibility
+	n, err := f.ReadAt(buf, 0)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("error reading file: %w", err)
+	}
+
+	// Look for the PDF header
+	pdfHeader := []byte("%PDF-1.")
+	index := bytes.Index(buf[:n], pdfHeader)
+	if index == -1 {
+		return fmt.Errorf("not a valid PDF file: missing header")
+	}
+
+	// Ensure the version number is valid (0-7)
+	if index+8 >= n || buf[index+7] < '0' || buf[index+7] > '7' {
+		return fmt.Errorf("not a valid PDF file: invalid version")
+	}
+
+	// Ensure it ends with a newline or carriage return
+	if index+9 < n && buf[index+8] != '\r' && buf[index+8] != '\n' {
+		return fmt.Errorf("not a valid PDF file: malformed header")
+	}
+
+	return nil
 }
 
 // Trailer returns the file's Trailer value.
